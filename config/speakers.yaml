@@ -1,0 +1,15 @@
+speakers:
+  Sonos Woonkamer:
+    volume: 3
+  Sonos Eetkamer:
+    volume: 3
+  Sonos Badkamer:
+    volume: 25
+    active:
+      start: 9
+      end: 19
+  Sonos Slaapkamer:
+    volume: 25
+    active:
+      start: 9
+      end: 20
