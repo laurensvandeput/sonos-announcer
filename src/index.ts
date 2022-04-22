@@ -69,7 +69,7 @@ try {
   app.use('/announce', stateController.restorePreviousState);
 
   server.listen(port, () => {
-    logger.info(`Server running at http://localhost:${port}`);
+    logger.info(`sonos-announcer listening on port ${port}`);
   });
 }
 catch (e: any) {
