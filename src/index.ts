@@ -13,6 +13,7 @@ import { AnnounceController } from './Controller/Announce.controller';
 import { StateController } from './Controller/State.controller';
 import { StateService } from './Service/State.service';
 import { SonosClient } from './Sonos/Client';
+import { AnnounceService } from './Service/Announce.service';
 
 if ((process.env.NODE_ENV || 'development') === 'development') {
   dotenv.config();
@@ -60,7 +61,8 @@ try {
   const sonosClient = new SonosClient(process.env.SONOS_HTTP_SERVER, logger);
   const stateService = new StateService(sonosClient, speakerConfig, logger);
   const stateController = new StateController(stateService, logger);
-  const announceController = new AnnounceController(speakerConfig, logger);
+  const announceService = new AnnounceService(sonosClient, speakerConfig, process.env.CLIP, logger);
+  const announceController = new AnnounceController(announceService, logger);
 
   app.use('/announce', stateController.saveCurrentState);
   app.use('/announce', announceController.announce);

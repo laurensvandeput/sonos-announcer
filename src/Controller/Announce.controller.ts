@@ -1,18 +1,20 @@
 import { NextFunction, Request, Response } from 'express';
 import { Logger } from 'winston';
-import { SpeakerConfig } from '../Config/SpeakerConfig';
+import { AnnounceService } from '../Service/Announce.service';
 
 export class AnnounceController {
 
-  constructor(private config: SpeakerConfig, private logger: Logger) {
+  constructor(private announceService: AnnounceService, private logger: Logger) {
   }
 
   announce = (req: Request, res: Response, next: NextFunction) => {
-    this.logger.info('Announcing', this.config.getSpeakers());
+    this.announceService.broadcast()
+      .then(() => {
+        this.logger.info('Sent announcement to the speakers.')
 
-    res.status(200);
-
-    next();
+        res.status(200);
+        next();
+      })
   }
 
 }

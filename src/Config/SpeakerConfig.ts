@@ -1,4 +1,4 @@
-import { SpeakerPreset, Speakers } from '../types';
+import { Speaker, Speakers } from '../types';
 
 export class SpeakerConfig {
   private readonly config: Speakers;
@@ -11,11 +11,11 @@ export class SpeakerConfig {
     this.config = config.speakers as Speakers;
   }
 
-  public getSpeakers(): string[] {
+  public getZones(): string[] {
     return Object.keys(this.config);
   }
 
-  public getConfig(speaker: string): SpeakerPreset {
+  public getConfig(speaker: string): Speaker {
     if (!(speaker in this.config)) {
       throw new Error(`There is no configuration for '${speaker}'`);
     }

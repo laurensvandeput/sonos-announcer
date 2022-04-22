@@ -21,9 +21,9 @@ export class StateController {
   }
 
   restorePreviousState = (req: Request, res: Response) => {
-    this.logger.info('restoring current state', this.systemState);
-
-    return res.status(200).json({success: true});
+    this.stateSerice.updateSpeakerStates(this.systemState)
+      .then(() => res.status(200).json({success: true}))
+      .catch(error => res.status(500).json(error));
   }
 
 }

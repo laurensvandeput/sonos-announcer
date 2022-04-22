@@ -1,8 +1,8 @@
 export interface Speakers {
-  [speaker: string]: SpeakerPreset;
+  [speaker: string]: Speaker;
 }
 
-export interface SpeakerPreset {
+export interface Speaker {
   volume: number;
   active?: {
     start?: number;
@@ -13,6 +13,28 @@ export interface SpeakerPreset {
 export interface SpeakerState {
   zone: string;
   volume: number;
-  uri: state;
+  uri: string;
   playbackState: string;
+}
+
+export interface SpeakerPreset {
+  zone: string;
+  preset: {
+    players: [
+      {
+        roomName: string;
+        volume: number
+      }
+    ];
+    uri: string;
+  };
+}
+
+export enum PlaybackState {
+  PLAYING = 'PLAYING'
+}
+
+export enum ResponseStatus {
+  SUCCESS = 'success',
+  ERROR = 'error'
 }
