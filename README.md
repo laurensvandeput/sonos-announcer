@@ -2,7 +2,7 @@
 A small node.js application to configure your Sonos speakers for visitor announcements. Commands are sent via jishi/node-sonos-http-api.
 
 # Configuration
-In order to have this application running, you need to private a YAML configuration file: `config/speakers.yaml`
+In order to have this application running, you need to provide a YAML configuration file: `config/speakers.yaml`
 
 ```
 speakers:
