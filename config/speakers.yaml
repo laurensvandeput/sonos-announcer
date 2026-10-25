@@ -1,15 +1,9 @@
 speakers:
-  Sonos Woonkamer:
+  Woonkamer:
+    # Sonos Beam; this label may differ from the name in the Sonos app.
+    uuid: RINCON_347E5C8246BA01400
     volume: 25
-  Sonos Eetkamer:
+  Keuken:
+    # Sonos Era 300
+    uuid: RINCON_804AF28596D001400
     volume: 30
-  Sonos Badkamer:
-    volume: 25
-    active:
-      start: 9
-      end: 19
-  Sonos Slaapkamer:
-    volume: 25
-    active:
-      start: 9
-      end: 20

@@ -1,89 +1,67 @@
-import * as fs from 'fs';
-import * as dotenv from 'dotenv';
-import * as http from 'http';
-import express from 'express';
-import YAML from 'yaml';
-import cors from 'cors';
-import helmet from 'helmet';
-import compression from 'compression';
-import Signals = NodeJS.Signals;
-import { SpeakerConfig } from './Config/SpeakerConfig';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { createLogger, format, transports } from 'winston';
-import { AnnounceController } from './Controller/Announce.controller';
-import { StateController } from './Controller/State.controller';
-import { StateService } from './Service/State.service';
+import dotenv from 'dotenv';
+import YAML from 'yaml';
+import { readAppConfig } from './Config/AppConfig';
+import { SpeakerConfig } from './Config/SpeakerConfig';
 import { SonosClient } from './Sonos/Client';
 import { AnnounceService } from './Service/Announce.service';
+import { createApp } from './app';
+import { Clip } from './Media/Clip';
 
-if ((process.env.NODE_ENV || 'development') === 'development') {
-  dotenv.config();
-}
+if ((process.env.NODE_ENV || 'development') === 'development') dotenv.config();
 
 const logger = createLogger({
-    level: 'info',
-    format: format.combine(
-      format.timestamp({
-        format: 'YYYY-MM-DD HH:mm:ss',
-      }),
-      format.errors({stack: true}),
-      format.splat(),
-      format.json(),
-    ),
-    defaultMeta: {service: 'sonos-announcer'},
-    transports: [
-      new transports.Console({
-        format: format.combine(
-          format.colorize(),
-          format.simple(),
-        ),
-      }),
-    ],
-  },
-);
-
-if (process.env.NODE_ENV === 'development') {
-  logger.level = 'debug';
-}
-
-const app: express.Application = express();
-const server: http.Server = http.createServer(app);
-const port = process.env.NODE_PORT;
-
-app.use(cors());
-app.use(helmet());
-app.use(compression());
-app.use(express.json());
+  level: 'info',
+  format: format.combine(format.timestamp(), format.errors({ stack: true }), format.json()),
+  defaultMeta: { service: 'sonos-announcer' },
+  transports: [new transports.Console()],
+});
 
 try {
-  const yaml = YAML.parse(fs.readFileSync('./config/speakers.yaml', 'utf8'));
-  const speakerConfig = new SpeakerConfig(yaml);
+  const config = readAppConfig();
+  const speakers = new SpeakerConfig(YAML.parse(readFileSync(config.speakersFile, 'utf8')));
+  const clip = new Clip(config.clipFile, config.mediaBaseUrl);
+  const service = new AnnounceService(new SonosClient(config.sonosUrls, config.requestTimeoutMs), speakers,
+    clip.url, logger, config.timeZone);
+  const server = createServer(createApp(service, logger, config.announceToken, clip));
 
-  const sonosClient = new SonosClient(process.env.SONOS_HTTP_SERVER, logger);
-  const stateService = new StateService(sonosClient, speakerConfig, logger);
-  const stateController = new StateController(stateService, logger);
-  const announceService = new AnnounceService(sonosClient, speakerConfig, process.env.CLIP, logger);
-  const announceController = new AnnounceController(announceService, logger);
-
-  app.use('/announce', stateController.saveCurrentState);
-  app.use('/announce', announceController.announce);
-  app.use('/announce', stateController.restorePreviousState);
-
-  server.listen(port, () => {
-    logger.info(`sonos-announcer listening on port ${port}`);
+  server.on('error', error => {
+    logger.error('HTTP server failed.', { message: error.message });
+    process.exitCode = 1;
   });
-}
-catch (e: any) {
-  logger.error(e.message);
-}
+  server.listen(config.port, () => logger.info('Listening for announcements.', {
+    port: config.port, timeZone: config.timeZone,
+  }));
 
-['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach((signal: Signals) => {
-  process.on(signal, async () => {
-    if (server) {
-      logger.info('Closing the server...');
-
-      server.close();
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info('Shutting down; waiting for active announcement.');
+    const deadline = setTimeout(() => {
+      logger.error('Shutdown deadline exceeded.');
+      process.exit(1);
+    }, config.shutdownTimeoutMs);
+    deadline.unref();
+    try {
+      // Keep the media server available until the speakers finish.
+      await service.stop();
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve());
+      });
+    } catch (error) {
+      logger.error('Shutdown failed.', { message: error instanceof Error ? error.message : String(error) });
+      process.exitCode = 1;
+    } finally {
+      clearTimeout(deadline);
     }
-
-    process.exit();
-  });
-});
+  };
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGQUIT'] as const) {
+    process.on(signal, () => { void shutdown(); });
+  }
+} catch (error) {
+  logger.error('Startup failed.', { message: error instanceof Error ? error.message : String(error) });
+  process.exitCode = 1;
+}

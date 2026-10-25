@@ -34,3 +34,6 @@ reports
 # Javascript
 **/*.js
 !jest.config.js
+
+# Local announcement audio (mount separately in Docker)
+clips/

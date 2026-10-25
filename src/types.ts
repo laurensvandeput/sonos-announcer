@@ -1,40 +1,34 @@
-export interface Speakers {
-  [speaker: string]: Speaker;
-}
-
 export interface Speaker {
+  uuid: string;
   volume: number;
-  active?: {
-    start?: number;
-    end?: number;
-  }
+  active?: { start: number; end: number };
 }
 
-export interface SpeakerState {
+export interface SonosPlayer {
+  id: string;
+  name: string;
+  householdId: string;
+  websocketUrl: string;
+  supportsAudioClip: boolean;
+}
+
+export interface SonosGateway {
+  discover(): Promise<SonosPlayer[]>;
+  sendAnnouncement(player: SonosPlayer, volume: number, clipUrl: string): Promise<void>;
+}
+
+export type AnnouncementStage = 'discovery' | 'announcement';
+
+export interface SpeakerResult {
   zone: string;
-  volume: number;
-  uri: string;
-  playbackState: string;
+  status: 'announced' | 'skipped' | 'failed';
+  reason?: 'outside_active_hours';
+  errors?: { stage: AnnouncementStage; message: string }[];
 }
 
-export interface SpeakerPreset {
-  zone: string;
-  preset: {
-    players: [
-      {
-        roomName: string;
-        volume: number
-      }
-    ];
-    uri: string;
-  };
+export interface AnnouncementResult {
+  success: boolean;
+  speakers: SpeakerResult[];
 }
 
-export enum PlaybackState {
-  PLAYING = 'PLAYING'
-}
-
-export enum ResponseStatus {
-  SUCCESS = 'success',
-  ERROR = 'error'
-}
+export type Logger = Pick<import('winston').Logger, 'info' | 'warn' | 'error'>;

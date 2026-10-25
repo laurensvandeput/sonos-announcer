@@ -1,53 +1,27 @@
-FROM node:16-alpine as dependencies
+FROM node:24-alpine AS dependencies
 WORKDIR /usr/src/app
-
 COPY package*.json ./
+RUN npm ci --no-audit --no-fund
 
-RUN npm ci
-
-#
-# ---- Build node_modules ----
-FROM node:16-alpine as prod-node-modules
-WORKDIR /usr/src/app
-
-COPY package*.json ./
-
-# install node packages
-RUN npm set progress=false && \
-    npm config set depth 0 && \
-    npm cache clean --force
-RUN npm install --only=production
-
-# prune for good measure
-RUN npm prune --production
-
-# ---- Compile source ----
-FROM dependencies as tsc-builder
-WORKDIR /usr/src/app
-
-ARG ENVIRONMENT='production'
-
-COPY . .
-
+FROM dependencies AS build
+COPY tsconfig*.json ./
+COPY src ./src
 RUN npm run build
 
-#
-# ---- Release image ----
-FROM node:16-alpine as release
-
-# Add Tini
-RUN apk add --no-cache tini
-
-# set working directory
+FROM node:24-alpine AS production-dependencies
 WORKDIR /usr/src/app
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
-COPY --from=prod-node-modules /usr/src/app/node_modules node_modules
-COPY --from=tsc-builder /usr/src/app/build/src .
-
-ENV NODE_ENV production
-ENV PORT 3000
-
+FROM node:24-alpine AS release
+RUN apk add --no-cache tini
+WORKDIR /usr/src/app
+COPY --from=production-dependencies /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/build/src ./
+COPY config ./config
+ENV NODE_ENV=production PORT=3000
+USER node
 EXPOSE 3000
-
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s CMD node -e "fetch('http://127.0.0.1:' + (process.env.NODE_PORT || process.env.PORT || 3000) + '/health', {signal: AbortSignal.timeout(2000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD [ "node", "index.js" ]
+CMD ["node", "index.js"]
