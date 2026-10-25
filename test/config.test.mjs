@@ -18,14 +18,22 @@ test('configuration uses direct Sonos addresses and retains port compatibility',
 
 test('invalid environment settings fail before startup', () => {
   for (const invalid of [
-    { SONOS_HOSTS: '' }, { SONOS_HOSTS: 'http://localhost:5005' }, { SONOS_HOSTS: 'speaker/path' },
+    { SONOS_HOSTS: ',' }, { SONOS_HOSTS: 'http://localhost:5005' }, { SONOS_HOSTS: 'speaker/path' },
     { SONOS_HOSTS: 'user:secret@speaker' }, { SONOS_HOSTS: 'speaker,' },
     { MEDIA_BASE_URL: '' }, { MEDIA_BASE_URL: 'file:///tmp/test' },
     { MEDIA_BASE_URL: 'http://host/?token=secret' }, { MEDIA_BASE_URL: 'http://user:secret@host' },
     { CLIP_FILE: './clip.wav' }, { PORT: '0' }, { PORT: '65536' }, { PORT: '1.5' }, { PORT: 'abc' },
     { TIME_ZONE: 'not/a/timezone' }, { SONOS_REQUEST_TIMEOUT_MS: '0' },
     { SHUTDOWN_TIMEOUT_MS: '-1' }, { ANNOUNCE_TOKEN: ' token ' },
+    { SONOS_DISCOVERY_INTERFACE: 'eth0' }, { SONOS_DISCOVERY_INTERFACE: '192.168.1.1:1900' },
   ]) assert.throws(() => readAppConfig({ ...env, ...invalid }), Error, JSON.stringify(invalid));
+});
+
+test('missing or empty Sonos hosts enable automatic discovery', () => {
+  for (const SONOS_HOSTS of [undefined, '', '  ']) {
+    assert.deepEqual(readAppConfig({ ...env, SONOS_HOSTS }).sonosUrls, []);
+  }
+  assert.equal(readAppConfig({ ...env, SONOS_DISCOVERY_INTERFACE: '10.1.50.20' }).discoveryInterface, '10.1.50.20');
 });
 
 test('speaker mappings, UUIDs, volumes and complete schedules are validated', () => {

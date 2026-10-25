@@ -9,7 +9,7 @@ The app connects **directly to the speakers** using their local WebSocket API an
 Requires Node.js 24 or newer. Docker uses Node.js 24 LTS.
 
 1. Put your MP3 in `clips/announce.mp3`. Local audio is ignored by Git and excluded from Docker builds; mount it separately in production.
-2. Copy `.env.dist` to `.env`. Set `SONOS_HOSTS` to one or more speaker IP addresses, and `MEDIA_BASE_URL` to **this application's address as reached by the speakers**, for example `http://192.168.1.20:3000`. Docker service names and `localhost` usually cannot be reached by speakers.
+2. Copy `.env.dist` to `.env`. Set `MEDIA_BASE_URL` to **this application's address as reached by the speakers**, for example `http://192.168.1.20:3000`. Docker service names and `localhost` usually cannot be reached by speakers. Leave `SONOS_HOSTS` empty for automatic network discovery; see the Docker networking instructions below.
 3. Configure speaker UUIDs in `config/speakers.yaml`. The included configuration selects the Beam in Woonkamer and the Era 300 in Keuken.
 4. Run `npm ci` and `npm start` for development.
 
@@ -33,7 +33,13 @@ speakers:
 
 The mapping keys are your own labels, used in logs and HTTP responses. Selection uses the physical speaker's UUID, so renaming Woonkamer or Keuken in Sonos does not break announcements. UUIDs are required and duplicates are rejected. Selecting by model alone would also select any additional speakers of that model.
 
-`SONOS_HOSTS` provides discovery addresses. On each announcement, the first reachable seed supplies the household's current player addresses; an unavailable seed does not delay an available one. Use DHCP reservations for the seed IP addresses. UUIDs survive IP changes, but at least one seed address must remain reachable. All seeds should belong to the same Sonos household. Each target's identity and `AUDIO_CLIP` capability are checked before playback. A missing or unsupported target fails individually without blocking other rooms. Malformed player descriptions are skipped with a diagnostic warning. Ambiguous duplicate UUIDs are excluded entirely, while usable speakers remain available. A missing display name falls back to the UUID.
+With `SONOS_HOSTS` unset or empty, the app discovers speakers automatically using SSDP. Like [node-sonos-discovery](https://github.com/jishi/node-sonos-discovery/blob/master/lib/sonos-ssdp.js), it sends searches over both multicast and broadcast on the available IPv4 network interfaces. Set `SONOS_DISCOVERY_INTERFACE` only if you need to select a particular local interface address. No additional Sonos library or service is needed.
+
+On each announcement, known addresses and newly discovered candidates are tried concurrently. The first reachable speaker supplies the household's current player addresses; an unavailable speaker does not delay an available one. Discovered addresses are cached for fast subsequent announcements, while SSDP can find changed IP addresses. The search stops after a successful response or three seconds; connection attempts share the overall `SONOS_REQUEST_TIMEOUT_MS` deadline. Discovery starts when needed, so an offline speaker does not prevent the HTTP server from starting. A network with one Sonos household is assumed.
+
+If your network blocks discovery, set `SONOS_HOSTS` to one or more speaker IP addresses or hostnames. This overrides automatic discovery. Use DHCP reservations for fixed seed IP addresses; at least one configured seed must remain reachable. All seeds should belong to the same Sonos household.
+
+Each target's identity and `AUDIO_CLIP` capability are checked before playback. A missing or unsupported target fails individually without blocking other rooms. Malformed player descriptions are skipped with a diagnostic warning. Ambiguous duplicate UUIDs are excluded entirely, while usable speakers remain available. A missing display name falls back to the UUID.
 
 Read-only discovery from your shell:
 
@@ -43,7 +49,7 @@ npm run speakers
 docker exec sonos-announcer node speakers.js
 ```
 
-This prints names, UUIDs, addresses and audio clip support as JSON on stdout. Diagnostic warnings and failures go to stderr. It only needs `SONOS_HOSTS`; no MP3 or media URL is required. There is no public `/zones` endpoint or Sonos API proxy.
+This prints names, UUIDs, addresses and audio clip support as JSON on stdout. Diagnostic warnings and failures go to stderr. It supports automatic discovery without any environment variables; no MP3 or media URL is required. There is no public `/zones` endpoint or Sonos API proxy.
 
 ## Playback and schedules
 
@@ -61,17 +67,18 @@ Protocol references: [Sonos audioClip](https://docs.sonos.com/reference/audiocli
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SONOS_HOSTS` | Required | Comma-separated speaker IP addresses; port defaults to 1443. |
+| `SONOS_HOSTS` | Unset: automatic discovery | Optional comma-separated speaker IP addresses or hostnames that override SSDP discovery; port defaults to 1443. |
+| `SONOS_DISCOVERY_INTERFACE` | All IPv4 interfaces | Optional local interface IPv4 address for SSDP searches; this is the container/server address, not a speaker address. |
 | `MEDIA_BASE_URL` | Required | HTTP(S) URL of this app, reachable from the speakers. No credentials, query or fragment. A reverse-proxy path prefix is supported if the proxy strips that prefix. |
 | `CLIP_FILE` | `./clips/doorbell.mp3` | Local MP3 path. The example environment uses `./clips/announce.mp3`. Must be non-empty, readable and at most 10 MiB. |
 | `PORT` | `3000` | Listening port. Legacy `NODE_PORT` takes precedence. |
 | `SPEAKERS_CONFIG` | `./config/speakers.yaml` | YAML configuration file. |
 | `TIME_ZONE` | Process timezone | IANA timezone; the example uses `Europe/Brussels`. |
-| `SONOS_REQUEST_TIMEOUT_MS` | `60000` | Total deadline per discovery connection or target operation, including playback completion. |
+| `SONOS_REQUEST_TIMEOUT_MS` | `60000` | Total deadline for discovery, or for each target operation including playback completion. |
 | `SHUTDOWN_TIMEOUT_MS` | Two operation timeouts + 5000 | Maximum shutdown drain time, default 125 seconds. |
 | `ANNOUNCE_TOKEN` | Unset | Optional bearer token required for `/announce`. |
 
-Use short MP3 clips and allow enough time for fetching and playback. Home Assistant and any reverse proxy must allow the HTTP request to wait for discovery and completion. Sonos must reach `MEDIA_BASE_URL`, and the app must reach the speakers on TCP 1443. No multicast discovery or inbound Sonos event callback ports are needed.
+Use short MP3 clips and allow enough time for fetching and playback. Home Assistant and any reverse proxy must allow the HTTP request to wait for discovery and completion. Sonos must reach `MEDIA_BASE_URL`, and the app must reach the speakers on TCP 1443. Automatic discovery additionally needs UDP searches to multicast `239.255.255.250:1900` or broadcast `255.255.255.255:1900`, with unicast responses allowed back to the app's ephemeral UDP ports. No inbound Sonos event callback ports are needed.
 
 Only local Sonos WebSocket connections allow the speakers' self-signed certificates. TLS verification is not disabled globally. If serving the MP3 through HTTPS, use a certificate the speakers trust.
 
@@ -109,7 +116,7 @@ The HTTP response includes a short code and message. Logs also include the affec
 | `TIMEOUT` | A connection or command exceeded its deadline; logs identify the phase and pending command. |
 | `COMMAND_REJECTED` | Sonos rejected a command; a safe Sonos error code is retained when supplied. |
 | `PROTOCOL_ERROR` | A message, command response or clip status was invalid. |
-| `DISCOVERY_FAILED` | None of the configured seeds returned usable player descriptions. |
+| `DISCOVERY_FAILED` | Network discovery found no reachable players, or all configured/cached/discovered addresses failed. Check network attachment and SSDP reachability. |
 | `PLAYER_NOT_FOUND` | The target UUID was missing, ambiguous or no longer matched the address. |
 | `UNSUPPORTED_PLAYER` | The target does not advertise `AUDIO_CLIP`. |
 | `CLIP_FAILED` | Sonos reported `ERROR`, `DISMISSED` or `INTERRUPTED`. |
@@ -129,7 +136,7 @@ The existing Home Assistant `/announce` integration can remain. Update the conta
    docker cp sonos-api:/app/static/clips/announce.mp3 ./clips/announce.mp3
    ```
 
-2. Mount the clips directory at `/usr/src/app/clips`, set `CLIP_FILE=./clips/announce.mp3`, `SONOS_HOSTS=10.1.60.156,10.1.60.216`, and a reachable `MEDIA_BASE_URL`.
+2. Mount the clips directory at `/usr/src/app/clips`, set `CLIP_FILE=./clips/announce.mp3` and a reachable `MEDIA_BASE_URL`. Attach the container to a network that can discover the speakers, as described below. Alternatively, set `SONOS_HOSTS=10.1.60.156,10.1.60.216` when multicast/broadcast is unavailable.
 3. Replace room-name-only configuration with the UUID mapping above. Remove `SONOS_HTTP_SERVER`, `CLIP` and `RESTORE_MODE`; they are no longer used.
 4. Deploy, check `/health`, and run `docker exec sonos-announcer node speakers.js`. Then check a real announcement with music/TV playing and while paused, including any usual speaker groups.
 5. Remove the old sonos-api service only after that check and after confirming nothing else uses it.
@@ -178,7 +185,36 @@ If the package name already exists, ensure this repository has Actions access in
 
 Keep `.env`, `config/speakers.yaml` and `clips/announce.mp3` on the server, using the migration instructions above. Set `MEDIA_BASE_URL` to an address through which the speakers can reach the server.
 
-For a published version (replace `1.0.0` with your version):
+### Docker networking for automatic discovery
+
+The container must receive discovery responses from the speaker network. A Docker bridge with a published HTTP port alone does not provide this. On a Linux server directly connected to the speaker LAN, [host networking](https://docs.docker.com/engine/network/drivers/host/) is one option: use `--network host` instead of `-p 3000:3000`. Host networking does not by itself bridge separate VLANs.
+
+On the existing Portainer server, `sonos-api` has an additional connection to the **`home_sonos_iot` IPvlan network**, with address `10.1.60.250`. The announcer currently has only `proxy` and `home_sonos_internal`. To use automatic discovery there, attach `sonos-announcer` to `home_sonos_iot` as well, with its own free address reserved for the container. Keep `proxy` for reverse-proxy access and select `proxy` explicitly in Traefik's Docker network setting if needed. Do not reuse `10.1.60.250` while `sonos-api` is still running. Add the attachment to the Portainer stack definition so it survives redeployment.
+
+For example, merge the following network settings into your existing Compose service, retaining its image, environment, volumes and labels:
+
+```yaml
+services:
+  sonos-announcer:
+    networks:
+      proxy: {}
+      sonos_iot:
+        ipv4_address: ${SONOS_ANNOUNCER_IP:?Set a free reserved address on the Sonos IoT subnet}
+
+networks:
+  proxy:
+    external: true
+    name: proxy
+  sonos_iot:
+    external: true
+    name: home_sonos_iot
+```
+
+`SONOS_ANNOUNCER_IP` is the container's own address, not a fixed speaker address. No `SONOS_HOSTS` is needed with working discovery. You can retain `home_sonos_internal` if another service still needs it. A working multicast relay is another option for separate networks; if discovery cannot be enabled, explicit `SONOS_HOSTS` still works over routed TCP connections.
+
+### Starting the container
+
+For a published version on a Linux server directly connected to the speaker LAN (replace `1.0.0` with your version; use the IPvlan attachment above for the existing Portainer server):
 
 ```sh
 docker pull --platform linux/amd64 ghcr.io/laurensvandeput/sonos-announcer:1.0.0
@@ -186,7 +222,7 @@ docker run --name sonos-announcer --restart unless-stopped \
   --platform linux/amd64 \
   --stop-timeout 130 \
   --env-file .env \
-  -p 3000:3000 \
+  --network host \
   --mount type=bind,src="$(pwd)/config",dst=/usr/src/app/config,readonly \
   --mount type=bind,src="$(pwd)/clips",dst=/usr/src/app/clips,readonly \
   ghcr.io/laurensvandeput/sonos-announcer:1.0.0
@@ -196,7 +232,7 @@ To try the current development branch, use `ghcr.io/laurensvandeput/sonos-announ
 
 In Portainer, configure a `ghcr.io` registry with the credentials above if the package is private, then use the desired full image reference in your existing container or stack. Preserve the required environment variables, port and read-only mounts. Pull/redeploy the container to use the new image; pulling alone does not replace a running container. The workflow publishes images and does not deploy to your server.
 
-The image runs as the unprivileged `node` user, so mounted files must be readable by that user. Adjust the published port when overriding `PORT` or `NODE_PORT`. For a local build, run `docker build --platform linux/amd64 -t sonos-announcer .`.
+The image runs as the unprivileged `node` user, so mounted files must be readable by that user. With host networking, ensure `PORT`/`NODE_PORT` is free on the host; port publishing is unnecessary. If using a bridge with explicit `SONOS_HOSTS`, use `-p 3000:3000` instead and adjust it when overriding the listening port. For a local build, run `docker build --platform linux/amd64 -t sonos-announcer .`.
 
 SIGINT, SIGTERM and SIGQUIT reject new announcements and wait for active clips, while keeping the MP3 available for the speakers. Docker's stop timeout must exceed `SHUTDOWN_TIMEOUT_MS`; 130 seconds covers the default 125 seconds.
 
@@ -208,6 +244,7 @@ The application stays on TypeScript, Node.js and Express. The Sonos adapter uses
 | --- | --- |
 | `Service/Announce.service.ts` | Schedules, target selection, concurrent-request coalescing and per-speaker results. |
 | `Sonos/Client.ts` | Discovery failover, connection lifetime and checking the selected target before playback. |
+| `Sonos/Ssdp.ts` | Bounded multicast/broadcast discovery, response validation and UDP socket cleanup. |
 | `Sonos/Session.ts` | WebSocket transport, request/response correlation, generic event buffering and deadlines. |
 | `Sonos/Protocol.ts` | Typed wire envelopes and runtime validation. |
 | `Sonos/Players.ts` | Player identity, addresses, capabilities and isolation of malformed descriptions. |
@@ -225,6 +262,6 @@ The application stays on TypeScript, Node.js and Express. The Sonos adapter uses
 - `npm run test:watch`: watch source-based tests. Build first; process tests exercise the compiled entry point.
 - `npm run speakers`: read-only discovery.
 
-Tests use simulated speakers over local TLS WebSockets and loopback HTTP servers. They cover UUID identity, rename handling, capability checks, malformed/duplicate player isolation, discovery failover, handshake/command diagnostics, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
+Tests use simulated speakers over local TLS WebSockets, UDP discovery responders and loopback HTTP servers. They cover automatic discovery, changed addresses, UDP retries/cancellation, startup without seed addresses, UUID identity, rename handling, capability checks, malformed/duplicate player isolation, discovery failover, handshake/command diagnostics, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
 
 CI runs lint, build and tests for pull requests, branch/version-tag pushes and manual runs. Successful push/manual runs then publish an AMD64 image to GHCR using the tags described above.

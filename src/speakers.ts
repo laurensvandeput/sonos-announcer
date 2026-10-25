@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { readSonosUrls } from './Config/AppConfig';
+import { readDiscoveryInterface, readSonosUrls } from './Config/AppConfig';
 import { SonosClient } from './Sonos/Client';
 import { errorDiagnostic, SonosError } from './Sonos/Errors';
 
@@ -9,7 +9,7 @@ if ((process.env.NODE_ENV || 'development') === 'development') dotenv.config({ q
 async function main(): Promise<void> {
   const client = new SonosClient(readSonosUrls(process.env.SONOS_HOSTS), 5000, {
     warn: (message: string, details: unknown) => { process.stderr.write(JSON.stringify({ message, details }) + '\n'); },
-  });
+  }, { interfaceAddress: readDiscoveryInterface(process.env.SONOS_DISCOVERY_INTERFACE) });
   const players = await client.discover();
   process.stdout.write(JSON.stringify(players.map(player => ({
     uuid: player.id, name: player.name, audioClip: player.supportsAudioClip,

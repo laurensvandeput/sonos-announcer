@@ -1,6 +1,9 @@
+import { isIPv4 } from 'node:net';
+
 export interface AppConfig {
   port: number;
   sonosUrls: string[];
+  discoveryInterface?: string;
   clipFile: string;
   mediaBaseUrl: string;
   speakersFile: string;
@@ -19,6 +22,7 @@ function positiveInteger(name: string, value: string, max = 600_000): number {
 }
 
 export function readSonosUrls(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
   const hosts = (value || '').split(',').map(host => host.trim());
   let sonosUrls: string[];
   try {
@@ -36,6 +40,12 @@ export function readSonosUrls(value: string | undefined): string[] {
   }
 
   return sonosUrls;
+}
+
+export function readDiscoveryInterface(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  if (!isIPv4(value.trim())) throw new Error('SONOS_DISCOVERY_INTERFACE must be a local IPv4 address.');
+  return value.trim();
 }
 
 export function readAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -64,6 +74,7 @@ export function readAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     port: positiveInteger('PORT / NODE_PORT', env.NODE_PORT || env.PORT || '3000', 65535),
     sonosUrls,
+    discoveryInterface: readDiscoveryInterface(env.SONOS_DISCOVERY_INTERFACE),
     clipFile,
     mediaBaseUrl: mediaBaseUrl.toString().replace(/\/+$/u, ''),
     speakersFile: env.SPEAKERS_CONFIG || './config/speakers.yaml',

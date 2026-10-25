@@ -65,6 +65,18 @@ test('production entry point fails with a nonzero exit for invalid or missing co
   }
 });
 
+test('production starts without SONOS_HOSTS and shuts down cleanly before any discovery', async t => {
+  const env = await configuration(t, 'http://127.0.0.1:1', { SONOS_HOSTS: '' });
+  const server = start(t, env);
+  await server.ready;
+  const health = await fetch('http://127.0.0.1:' + env.PORT + '/health');
+  assert.equal(health.status, 200);
+  await health.text();
+  assert.match(server.output(), /automatic SSDP/);
+  server.child.kill('SIGTERM');
+  assert.deepEqual(await server.exited, { code: 0, signal: null });
+});
+
 test('SIGTERM keeps serving the clip while waiting for Sonos completion', async t => {
   const playing = deferred();
   const finishClip = deferred();
