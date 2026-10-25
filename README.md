@@ -134,20 +134,69 @@ The existing Home Assistant `/announce` integration can remain. Update the conta
 4. Deploy, check `/health`, and run `docker exec sonos-announcer node speakers.js`. Then check a real announcement with music/TV playing and while paused, including any usual speaker groups.
 5. Remove the old sonos-api service only after that check and after confirming nothing else uses it.
 
-## Docker
+## GitHub Container Registry and releases
+
+The GitHub Actions workflow builds **`linux/amd64`** images and publishes them to:
+
+```text
+ghcr.io/laurensvandeput/sonos-announcer
+```
+
+Every push and manual workflow run first runs lint, compilation and the complete test suite. Publishing starts only after those checks pass. Pull requests run the checks without publishing an image. Builds use GitHub's native AMD64 runner and Buildx; no QEMU is needed in CI.
+
+| Trigger | Published tags |
+| --- | --- |
+| Push to `master` | `latest`, `branch-master`, `sha-<full-commit-sha>` |
+| Push to another branch | `branch-<sanitized-branch-name>`, `sha-<full-commit-sha>` |
+| Push a version tag such as `v1.0.0` | `1.0.0`, `sha-<full-commit-sha>` |
+| Push a prerelease tag such as `v1.1.0-beta.1` | `1.1.0-beta.1`, `sha-<full-commit-sha>` |
+| Manual run | Tags for the selected branch or version tag, as above |
+
+The current development branch publishes `branch-codex-native-sonos-announcements`. Only `master` updates `latest`; version tags and development branches leave it unchanged. For a deployment you want to reproduce exactly, use the image digest shown in the workflow's build summary (`ghcr.io/laurensvandeput/sonos-announcer@sha256:...`). Branch tags and `latest` move as new builds complete.
+
+To publish a version after merging and testing the desired commit:
 
 ```sh
-docker build -t sonos-announcer .
+git switch master
+git pull --ff-only
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Choose a new version number for each release. There is no need to create a GitHub Release object; pushing the version tag triggers publication. Existing Docker Hub publishing and its secrets are no longer used by this workflow.
+
+The workflow authenticates with the automatic `GITHUB_TOKEN`, with `packages: write` scoped to the publishing job. No additional publishing token is required. A newly published GHCR package is private by default. To pull it without credentials, change its visibility to public in the package settings. For private packages, authenticate your Docker server or Portainer registry with a GitHub personal access token (classic) that has `read:packages` and access to this package. See [GitHub's Container registry authentication guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
+
+```sh
+# For a private package, enter your read:packages token at the password prompt.
+docker login ghcr.io --username laurensvandeput
+```
+
+If the package name already exists, ensure this repository has Actions access in the package settings. The image's source label connects new packages to this repository. See [GitHub's publishing guide](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images#publishing-images-to-github-packages).
+
+## Running the image on your Docker server
+
+Keep `.env`, `config/speakers.yaml` and `clips/announce.mp3` on the server, using the migration instructions above. Set `MEDIA_BASE_URL` to an address through which the speakers can reach the server.
+
+For a published version (replace `1.0.0` with your version):
+
+```sh
+docker pull --platform linux/amd64 ghcr.io/laurensvandeput/sonos-announcer:1.0.0
 docker run --name sonos-announcer --restart unless-stopped \
+  --platform linux/amd64 \
   --stop-timeout 130 \
   --env-file .env \
   -p 3000:3000 \
   --mount type=bind,src="$(pwd)/config",dst=/usr/src/app/config,readonly \
   --mount type=bind,src="$(pwd)/clips",dst=/usr/src/app/clips,readonly \
-  sonos-announcer
+  ghcr.io/laurensvandeput/sonos-announcer:1.0.0
 ```
 
-The image includes the example speaker configuration. It runs as the unprivileged `node` user, so mounted files must be readable by that user. Adjust the published port when overriding `PORT` or `NODE_PORT`.
+To try the current development branch, use `ghcr.io/laurensvandeput/sonos-announcer:branch-codex-native-sonos-announcements` instead. `latest` becomes available after the workflow runs successfully on `master`.
+
+In Portainer, configure a `ghcr.io` registry with the credentials above if the package is private, then use the desired full image reference in your existing container or stack. Preserve the required environment variables, port and read-only mounts. Pull/redeploy the container to use the new image; pulling alone does not replace a running container. The workflow publishes images and does not deploy to your server.
+
+The image runs as the unprivileged `node` user, so mounted files must be readable by that user. Adjust the published port when overriding `PORT` or `NODE_PORT`. For a local build, run `docker build --platform linux/amd64 -t sonos-announcer .`.
 
 SIGINT, SIGTERM and SIGQUIT reject new announcements and wait for active clips, while keeping the MP3 available for the speakers. Docker's stop timeout must exceed `SHUTDOWN_TIMEOUT_MS`; 130 seconds covers the default 125 seconds.
 
@@ -178,4 +227,4 @@ The application stays on TypeScript, Node.js and Express. The Sonos adapter uses
 
 Tests use simulated speakers over local TLS WebSockets and loopback HTTP servers. They cover UUID identity, rename handling, capability checks, malformed/duplicate player isolation, discovery failover, handshake/command diagnostics, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
 
-CI runs lint, build and tests for pull requests and master pushes. Docker publishing remains restricted to master after those checks pass.
+CI runs lint, build and tests for pull requests, branch/version-tag pushes and manual runs. Successful push/manual runs then publish an AMD64 image to GHCR using the tags described above.
