@@ -6,7 +6,7 @@ import { SonosClient } from '../src/Sonos/Client.ts';
 import { livingId, sonosServer } from './sonos-server.mjs';
 
 const request = { namespace: 'groups:1', command: 'getGroups', householdId: 'test-household' };
-const clipUrl = 'http://announcer.test/clip.mp3';
+const media = { urlFor: () => 'http://announcer.test/clip.mp3' };
 
 async function sessionFor(t, options = {}, timeout = 1000) {
   const server = await sonosServer(t, options);
@@ -108,5 +108,5 @@ test('invalid status for our own clip is a protocol failure, unrelated events ar
     return true;
   } });
   const client = new SonosClient([server.url], 1000);
-  await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, clipUrl), { code: 'PROTOCOL_ERROR' });
+  await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, media), { code: 'PROTOCOL_ERROR' });
 });

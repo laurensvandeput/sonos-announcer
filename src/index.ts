@@ -22,12 +22,12 @@ const logger = createLogger({
 try {
   const config = readAppConfig();
   const speakers = new SpeakerConfig(YAML.parse(readFileSync(config.speakersFile, 'utf8')));
-  const clip = new Clip(config.clipFile, config.mediaBaseUrl);
+  const clip = new Clip(config.clipFile, config.port, config.mediaBaseUrl);
   const client = new SonosClient(config.sonosUrls, config.requestTimeoutMs, logger, {
     interfaceAddress: config.discoveryInterface,
   });
   const service = new AnnounceService(client, speakers,
-    clip.url, logger, config.timeZone);
+    clip, logger, config.timeZone);
   const server = createServer(createApp(service, logger, config.announceToken, clip));
 
   server.on('error', error => {
@@ -36,6 +36,7 @@ try {
   });
   server.listen(config.port, () => logger.info('Listening for announcements.', {
     port: config.port, timeZone: config.timeZone, discovery: config.sonosUrls.length ? 'configured hosts' : 'automatic SSDP',
+    mediaAddress: config.mediaBaseUrl ? 'configured override' : 'automatic from speaker connection',
   }));
 
   let shuttingDown = false;

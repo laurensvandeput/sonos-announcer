@@ -7,7 +7,7 @@ import { createApp } from '../src/app.ts';
 import { listen, logger } from './helpers.mjs';
 import { kitchenId, livingId, sonosServer } from './sonos-server.mjs';
 
-const clipUrl = 'http://announcer.test/clip.mp3';
+const media = { urlFor: () => 'http://announcer.test/clip.mp3' };
 
 test('a malformed configured speaker fails individually while the healthy speaker announces over HTTP', async t => {
   const warnings = [];
@@ -20,7 +20,7 @@ test('a malformed configured speaker fails individually while the healthy speake
   const client = new SonosClient([server.url], 1000, diagnostics);
   const service = new AnnounceService(client, new SpeakerConfig({ speakers: {
     Living: { uuid: livingId, volume: 25 }, Kitchen: { uuid: kitchenId, volume: 30 },
-  } }), clipUrl, diagnostics, 'Europe/Brussels');
+  } }), media, diagnostics, 'Europe/Brussels');
   const { url } = await listen(t, createApp(service, diagnostics));
   const response = await fetch(url + '/announce');
   assert.equal(response.status, 502);

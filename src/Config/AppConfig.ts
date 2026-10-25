@@ -5,7 +5,7 @@ export interface AppConfig {
   sonosUrls: string[];
   discoveryInterface?: string;
   clipFile: string;
-  mediaBaseUrl: string;
+  mediaBaseUrl?: string;
   speakersFile: string;
   timeZone: string;
   requestTimeoutMs: number;
@@ -50,11 +50,13 @@ export function readDiscoveryInterface(value: string | undefined): string | unde
 
 export function readAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const sonosUrls = readSonosUrls(env.SONOS_HOSTS);
-  let mediaBaseUrl: URL;
+  let mediaBaseUrl: URL | undefined;
   try {
-    mediaBaseUrl = new URL(env.MEDIA_BASE_URL || '');
-    if (!['http:', 'https:'].includes(mediaBaseUrl.protocol) || mediaBaseUrl.username ||
-      mediaBaseUrl.password || mediaBaseUrl.search || mediaBaseUrl.hash) throw new Error();
+    if (env.MEDIA_BASE_URL?.trim()) {
+      mediaBaseUrl = new URL(env.MEDIA_BASE_URL.trim());
+      if (!['http:', 'https:'].includes(mediaBaseUrl.protocol) || mediaBaseUrl.username ||
+        mediaBaseUrl.password || mediaBaseUrl.search || mediaBaseUrl.hash) throw new Error();
+    }
   } catch {
     throw new Error('MEDIA_BASE_URL must be the HTTP(S) address of this app as reached by the speakers, without credentials, query or fragment.');
   }
@@ -76,7 +78,7 @@ export function readAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sonosUrls,
     discoveryInterface: readDiscoveryInterface(env.SONOS_DISCOVERY_INTERFACE),
     clipFile,
-    mediaBaseUrl: mediaBaseUrl.toString().replace(/\/+$/u, ''),
+    mediaBaseUrl: mediaBaseUrl?.toString().replace(/\/+$/u, ''),
     speakersFile: env.SPEAKERS_CONFIG || './config/speakers.yaml',
     timeZone,
     requestTimeoutMs,

@@ -19,6 +19,7 @@ export class Session {
   private failure?: SonosError;
   private sequence = 0;
   private connected = false;
+  private connectionAddress?: string;
 
   constructor(url: string, timeoutMs: number) {
     this.host = new URL(url).host;
@@ -33,6 +34,7 @@ export class Session {
     });
     this.deadline = setTimeout(() => this.fail(new SonosError('TIMEOUT',
       'Sonos operation timed out after ' + timeoutMs + ' ms.', this.context())), timeoutMs);
+    this.socket.on('upgrade', response => { this.connectionAddress = response.socket.localAddress; });
     this.socket.on('open', () => { this.connected = true; this.openWaiter?.resolve(); this.openWaiter = undefined; });
     this.socket.on('unexpected-response', (_request, response) => {
       this.fail(new SonosError('HANDSHAKE_REJECTED', 'Sonos rejected the WebSocket handshake.',
@@ -51,6 +53,8 @@ export class Session {
   }
 
   async open(): Promise<void> { await this.ready; }
+
+  get localAddress(): string | undefined { return this.connectionAddress; }
 
   command(header: RequestHeader, body: Record<string, unknown> = {}): Promise<Message> {
     if (this.failure) return Promise.reject(this.failure);

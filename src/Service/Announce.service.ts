@@ -1,5 +1,5 @@
 import { isActiveAtHour, SpeakerConfig } from '../Config/SpeakerConfig';
-import { AnnouncementResult, AnnouncementStage, Logger, SonosGateway, SonosPlayer, SpeakerResult } from '../types';
+import { AnnouncementMedia, AnnouncementResult, AnnouncementStage, Logger, SonosGateway, SonosPlayer, SpeakerResult } from '../types';
 import { errorDiagnostic, SonosError } from '../Sonos/Errors';
 
 export class ShuttingDownError extends Error {}
@@ -12,7 +12,7 @@ export class AnnounceService {
   constructor(
     private readonly client: SonosGateway,
     private readonly config: SpeakerConfig,
-    private readonly clip: string,
+    private readonly clip: AnnouncementMedia,
     private readonly logger: Logger,
     timeZone: string,
     private readonly now: () => Date = () => new Date(),

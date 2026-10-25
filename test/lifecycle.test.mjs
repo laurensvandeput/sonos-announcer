@@ -27,7 +27,7 @@ async function configuration(t, url, overrides = {}) {
   await writeFile(config, 'speakers:\n  Living:\n    uuid: ' + livingId + '\n    volume: 25\n');
   const clip = join(directory, 'doorbell.mp3');
   await writeFile(clip, 'ID3test audio bytes');
-  return { ...process.env, NODE_ENV: 'production', SONOS_HOSTS: new URL(url).host, CLIP_FILE: clip, MEDIA_BASE_URL: 'http://127.0.0.1:3000',
+  return { ...process.env, NODE_ENV: 'production', SONOS_HOSTS: new URL(url).host, CLIP_FILE: clip, MEDIA_BASE_URL: '',
     SPEAKERS_CONFIG: config, PORT: String(await freePort()), NODE_PORT: '',
     ANNOUNCE_TOKEN: '', TIME_ZONE: 'Europe/Brussels', SONOS_REQUEST_TIMEOUT_MS: '1000', SHUTDOWN_TIMEOUT_MS: '4000', ...overrides };
 }
@@ -65,7 +65,7 @@ test('production entry point fails with a nonzero exit for invalid or missing co
   }
 });
 
-test('production starts without SONOS_HOSTS and shuts down cleanly before any discovery', async t => {
+test('production starts without Sonos hosts or a media URL and shuts down cleanly before any discovery', async t => {
   const env = await configuration(t, 'http://127.0.0.1:1', { SONOS_HOSTS: '' });
   const server = start(t, env);
   await server.ready;
@@ -73,6 +73,7 @@ test('production starts without SONOS_HOSTS and shuts down cleanly before any di
   assert.equal(health.status, 200);
   await health.text();
   assert.match(server.output(), /automatic SSDP/);
+  assert.match(server.output(), /automatic from speaker connection/);
   server.child.kill('SIGTERM');
   assert.deepEqual(await server.exited, { code: 0, signal: null });
 });
@@ -88,20 +89,24 @@ test('SIGTERM keeps serving the clip while waiting for Sonos completion', async 
     return true;
   } });
   const env = await configuration(t, upstream.url);
-  env.MEDIA_BASE_URL = 'http://127.0.0.1:' + env.PORT;
+  const origin = 'http://127.0.0.1:' + env.PORT;
   const server = start(t, env);
   await server.ready;
-  const response = fetch(env.MEDIA_BASE_URL + '/announce');
+  const response = fetch(origin + '/announce', { headers: {
+    Host: 'unrelated-proxy.example.test', 'X-Forwarded-Host': 'unrelated-proxy.example.test',
+    'X-Forwarded-Proto': 'https', Forwarded: 'host=unrelated-proxy.example.test;proto=https',
+  } });
   const clipUrl = await playing.promise;
+  assert.equal(new URL(clipUrl).origin, origin);
   server.child.kill('SIGTERM');
   // Wait for the process to handle SIGTERM before requesting the media.
   for (let attempt = 0; attempt < 100; attempt++) {
-    const health = await fetch(env.MEDIA_BASE_URL + '/health');
+    const health = await fetch(origin + '/health');
     await health.text();
     if (health.status === 503) break;
     await new Promise(resolve => setTimeout(resolve, 5));
   }
-  assert.equal((await fetch(env.MEDIA_BASE_URL + '/announce')).status, 503);
+  assert.equal((await fetch(origin + '/announce')).status, 503);
   const media = await fetch(clipUrl);
   assert.equal(media.status, 200);
   assert.equal(await media.text(), 'ID3test audio bytes');

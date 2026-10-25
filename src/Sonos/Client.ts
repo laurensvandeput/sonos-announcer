@@ -1,4 +1,4 @@
-import { SonosGateway, SonosPlayer } from '../types';
+import { AnnouncementMedia, SonosGateway, SonosPlayer } from '../types';
 import { playAudioClip } from './AudioClip';
 import { ErrorDetails, errorDiagnostic, SonosError } from './Errors';
 import { parsePlayers, speakerUrl } from './Players';
@@ -85,7 +85,7 @@ export class SonosClient implements SonosGateway {
     }
   }
 
-  async sendAnnouncement(player: SonosPlayer, volume: number, clipUrl: string): Promise<void> {
+  async sendAnnouncement(player: SonosPlayer, volume: number, media: AnnouncementMedia): Promise<void> {
     const url = speakerUrl(player.websocketUrl);
     const session = new Session(url, this.timeoutMs);
     try {
@@ -94,7 +94,7 @@ export class SonosClient implements SonosGateway {
       if (candidates.length !== 1) throw new SonosError('PLAYER_NOT_FOUND', 'Speaker address no longer matches the configured UUID.');
       const current = candidates[0];
       if (!current.supportsAudioClip) throw new SonosError('UNSUPPORTED_PLAYER', 'Speaker does not support AUDIO_CLIP.');
-      await playAudioClip(session, current, volume, clipUrl);
+      await playAudioClip(session, current, volume, media.urlFor(session.localAddress));
     } finally {
       session.close();
     }

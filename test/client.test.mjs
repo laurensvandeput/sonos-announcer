@@ -5,6 +5,7 @@ import { deferred } from './helpers.mjs';
 import { livingId, sonosServer } from './sonos-server.mjs';
 
 const clipUrl = 'http://announcer.test/clips/doorbell.mp3';
+const media = { urlFor: () => clipUrl };
 
 test('discovers renamed speakers by UUID and waits for their own clip to finish', async t => {
   const playing = deferred();
@@ -28,7 +29,7 @@ test('discovers renamed speakers by UUID and waits for their own clip to finish'
   assert.equal(player.name, 'New living room name');
   assert.equal(player.supportsAudioClip, true);
   let settled = false;
-  const announcement = client.sendAnnouncement(player, 0, clipUrl).then(() => { settled = true; });
+  const announcement = client.sendAnnouncement(player, 0, media).then(() => { settled = true; });
   await playing.promise;
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(settled, false);
@@ -56,7 +57,7 @@ test('completion events received before the acknowledgement are retained', async
     return true;
   } });
   const client = new SonosClient([server.url], 1000);
-  await client.sendAnnouncement((await client.discover())[0], 25, clipUrl);
+  await client.sendAnnouncement((await client.discover())[0], 25, media);
 });
 
 for (const state of ['ERROR', 'DISMISSED', 'INTERRUPTED']) {
@@ -66,7 +67,7 @@ for (const state of ['ERROR', 'DISMISSED', 'INTERRUPTED']) {
       reply({ id: 'our-clip' }); status(state); return true;
     } });
     const client = new SonosClient([server.url], 1000);
-    await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, clipUrl), new RegExp(state));
+    await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, media), new RegExp(state));
   });
 }
 
@@ -76,7 +77,7 @@ test('an acknowledgement alone is not success; timeout closes the socket without
     reply({ id: 'our-clip' }); return true;
   } });
   const client = new SonosClient([server.url], 150);
-  await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, clipUrl), error => {
+  await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, media), error => {
     assert.equal(error.code, 'CLIP_TIMEOUT');
     assert.equal(error.details.phase, 'event');
     return true;
@@ -91,7 +92,7 @@ test('a stale IP or unsupported speaker never receives a playback command', asyn
     const [player] = await client.discover();
     if (invalid === 'identity') server.player.id = server.player.devices[0].id = 'RINCON_00000000000101400';
     else server.player.devices[0].capabilities = ['PLAYBACK'];
-    await assert.rejects(client.sendAnnouncement(player, 25, clipUrl), /UUID|AUDIO_CLIP/);
+    await assert.rejects(client.sendAnnouncement(player, 25, media), /UUID|AUDIO_CLIP/);
     assert.equal(server.calls.some(({ header }) => header.command === 'loadAudioClip'), false);
   }
 });
@@ -107,7 +108,7 @@ test('command errors, malformed JSON and unexpected disconnects fail without lea
       return true;
     } });
     const client = new SonosClient([server.url], 1000);
-    await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, clipUrl), error => {
+    await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, media), error => {
       assert.doesNotMatch(error.message, /private details/); return true;
     });
   }

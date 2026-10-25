@@ -9,7 +9,7 @@ The app connects **directly to the speakers** using their local WebSocket API an
 Requires Node.js 24 or newer. Docker uses Node.js 24 LTS.
 
 1. Put your MP3 in `clips/announce.mp3`. Local audio is ignored by Git and excluded from Docker builds; mount it separately in production.
-2. Copy `.env.dist` to `.env`. Set `MEDIA_BASE_URL` to **this application's address as reached by the speakers**, for example `http://192.168.1.20:3000`. Docker service names and `localhost` usually cannot be reached by speakers. Leave `SONOS_HOSTS` empty for automatic network discovery; see the Docker networking instructions below.
+2. Copy `.env.dist` to `.env`. Leave `SONOS_HOSTS` and `MEDIA_BASE_URL` unset for automatic speaker discovery and media addressing. Connect the app to the speaker network; see the Docker networking instructions below.
 3. Configure speaker UUIDs in `config/speakers.yaml`. The included configuration selects the Beam in Woonkamer and the Era 300 in Keuken.
 4. Run `npm ci` and `npm start` for development.
 
@@ -51,6 +51,14 @@ docker exec sonos-announcer node speakers.js
 
 This prints names, UUIDs, addresses and audio clip support as JSON on stdout. Diagnostic warnings and failures go to stderr. It supports automatic discovery without any environment variables; no MP3 or media URL is required. There is no public `/zones` endpoint or Sonos API proxy.
 
+## Serving the mounted MP3
+
+Speakers fetch the mounted MP3 from this app over HTTP. The app constructs the URL automatically from **its own local IP address on the connection to each speaker** and the HTTP listening port (`PORT`, or legacy `NODE_PORT`). It does not need a configured domain name, public URL or reverse-proxy mapping. The address is resolved for each announcement, so network changes are picked up on the next connection. HTTP `Host` and forwarded headers do not influence the media address.
+
+This follows the approach of [node-sonos-http-api's clip action](https://github.com/jishi/node-sonos-http-api/blob/master/lib/actions/clip.js), which also served mounted files over HTTP using its local endpoint and listening port. The speaker never reads the Docker mount directly. Home Assistant can use the existing reverse proxy for `/announce`, while Sonos fetches the MP3 directly on the internal speaker network.
+
+The network layer must allow the speakers to reach the container at that address and port. A direct IPvlan/macvlan attachment or suitable host networking provides this without application URL configuration. Automatic addressing cannot infer an arbitrary NAT port translation or external proxy URL. `MEDIA_BASE_URL` remains an optional override for those deployments; existing explicit values continue to work. An override can include a path prefix if the proxy strips it.
+
 ## Playback and schedules
 
 The native clip feature handles coexistence with music or TV audio on the speaker. This app sends no pause, seek, volume-change, regrouping or restoration commands. Clip volume is supplied with the clip, rather than changing the regular player volume. The Beam and Era 300 in the example configuration have both advertised `AUDIO_CLIP` support during a read-only check.
@@ -69,7 +77,7 @@ Protocol references: [Sonos audioClip](https://docs.sonos.com/reference/audiocli
 | --- | --- | --- |
 | `SONOS_HOSTS` | Unset: automatic discovery | Optional comma-separated speaker IP addresses or hostnames that override SSDP discovery; port defaults to 1443. |
 | `SONOS_DISCOVERY_INTERFACE` | All IPv4 interfaces | Optional local interface IPv4 address for SSDP searches; this is the container/server address, not a speaker address. |
-| `MEDIA_BASE_URL` | Required | HTTP(S) URL of this app, reachable from the speakers. No credentials, query or fragment. A reverse-proxy path prefix is supported if the proxy strips that prefix. |
+| `MEDIA_BASE_URL` | Unset: automatic addressing | Optional HTTP(S) override for NAT/proxy deployments. Otherwise use the app's local address on each speaker connection and the HTTP listening port. No credentials, query or fragment in an override. |
 | `CLIP_FILE` | `./clips/doorbell.mp3` | Local MP3 path. The example environment uses `./clips/announce.mp3`. Must be non-empty, readable and at most 10 MiB. |
 | `PORT` | `3000` | Listening port. Legacy `NODE_PORT` takes precedence. |
 | `SPEAKERS_CONFIG` | `./config/speakers.yaml` | YAML configuration file. |
@@ -78,7 +86,7 @@ Protocol references: [Sonos audioClip](https://docs.sonos.com/reference/audiocli
 | `SHUTDOWN_TIMEOUT_MS` | Two operation timeouts + 5000 | Maximum shutdown drain time, default 125 seconds. |
 | `ANNOUNCE_TOKEN` | Unset | Optional bearer token required for `/announce`. |
 
-Use short MP3 clips and allow enough time for fetching and playback. Home Assistant and any reverse proxy must allow the HTTP request to wait for discovery and completion. Sonos must reach `MEDIA_BASE_URL`, and the app must reach the speakers on TCP 1443. Automatic discovery additionally needs UDP searches to multicast `239.255.255.250:1900` or broadcast `255.255.255.255:1900`, with unicast responses allowed back to the app's ephemeral UDP ports. No inbound Sonos event callback ports are needed.
+Use short MP3 clips and allow enough time for fetching and playback. Home Assistant and any reverse proxy must allow the HTTP request to wait for discovery and completion. Sonos must reach the app on its HTTP listening port (3000 by default), and the app must reach the speakers on TCP 1443. If a media override is configured, Sonos must reach that address instead. Automatic discovery additionally needs UDP searches to multicast `239.255.255.250:1900` or broadcast `255.255.255.255:1900`, with unicast responses allowed back to the app's ephemeral UDP ports. No inbound Sonos event callback ports are needed.
 
 Only local Sonos WebSocket connections allow the speakers' self-signed certificates. TLS verification is not disabled globally. If serving the MP3 through HTTPS, use a certificate the speakers trust.
 
@@ -119,6 +127,7 @@ The HTTP response includes a short code and message. Logs also include the affec
 | `DISCOVERY_FAILED` | Network discovery found no reachable players, or all configured/cached/discovered addresses failed. Check network attachment and SSDP reachability. |
 | `PLAYER_NOT_FOUND` | The target UUID was missing, ambiguous or no longer matched the address. |
 | `UNSUPPORTED_PLAYER` | The target does not advertise `AUDIO_CLIP`. |
+| `MEDIA_ADDRESS_UNAVAILABLE` | The connection did not provide a usable local IP address for serving the MP3. No playback command is sent. |
 | `CLIP_FAILED` | Sonos reported `ERROR`, `DISMISSED` or `INTERRUPTED`. |
 | `CLIP_TIMEOUT` | Sonos acknowledged the clip but did not confirm completion before the deadline. |
 | `UNEXPECTED_ERROR` | An unexpected application failure occurred during the speaker operation. |
@@ -136,7 +145,7 @@ The existing Home Assistant `/announce` integration can remain. Update the conta
    docker cp sonos-api:/app/static/clips/announce.mp3 ./clips/announce.mp3
    ```
 
-2. Mount the clips directory at `/usr/src/app/clips`, set `CLIP_FILE=./clips/announce.mp3` and a reachable `MEDIA_BASE_URL`. Attach the container to a network that can discover the speakers, as described below. Alternatively, set `SONOS_HOSTS=10.1.60.156,10.1.60.216` when multicast/broadcast is unavailable.
+2. Mount the clips directory at `/usr/src/app/clips` and set `CLIP_FILE=./clips/announce.mp3`. Attach the container to the speaker network as described below; speaker discovery and the MP3 URL are automatic. Alternatively, set `SONOS_HOSTS=10.1.60.156,10.1.60.216` when multicast/broadcast is unavailable. A media override is only needed if your deployment requires address/port translation.
 3. Replace room-name-only configuration with the UUID mapping above. Remove `SONOS_HTTP_SERVER`, `CLIP` and `RESTORE_MODE`; they are no longer used.
 4. Deploy, check `/health`, and run `docker exec sonos-announcer node speakers.js`. Then check a real announcement with music/TV playing and while paused, including any usual speaker groups.
 5. Remove the old sonos-api service only after that check and after confirming nothing else uses it.
@@ -183,7 +192,7 @@ If the package name already exists, ensure this repository has Actions access in
 
 ## Running the image on your Docker server
 
-Keep `.env`, `config/speakers.yaml` and `clips/announce.mp3` on the server, using the migration instructions above. Set `MEDIA_BASE_URL` to an address through which the speakers can reach the server.
+Keep `.env`, `config/speakers.yaml` and `clips/announce.mp3` on the server, using the migration instructions above. With a direct connection to the speaker network, leave `MEDIA_BASE_URL` unset; the app derives its internal media address automatically.
 
 ### Docker networking for automatic discovery
 
@@ -210,7 +219,7 @@ networks:
     name: home_sonos_iot
 ```
 
-`SONOS_ANNOUNCER_IP` is the container's own address, not a fixed speaker address. No `SONOS_HOSTS` is needed with working discovery. You can retain `home_sonos_internal` if another service still needs it. A working multicast relay is another option for separate networks; if discovery cannot be enabled, explicit `SONOS_HOSTS` still works over routed TCP connections.
+`SONOS_ANNOUNCER_IP` is the container's own address, managed by Docker; it does not need to be copied into an application URL setting. No `SONOS_HOSTS` or `MEDIA_BASE_URL` is needed with this direct network attachment. You can retain `home_sonos_internal` if another service still needs it. A working multicast relay is another option for separate networks; if discovery cannot be enabled, explicit `SONOS_HOSTS` still works over routed TCP connections. In all cases, allow the speakers to reach the app's HTTP port for MP3 downloads.
 
 ### Starting the container
 
@@ -245,12 +254,12 @@ The application stays on TypeScript, Node.js and Express. The Sonos adapter uses
 | `Service/Announce.service.ts` | Schedules, target selection, concurrent-request coalescing and per-speaker results. |
 | `Sonos/Client.ts` | Discovery failover, connection lifetime and checking the selected target before playback. |
 | `Sonos/Ssdp.ts` | Bounded multicast/broadcast discovery, response validation and UDP socket cleanup. |
-| `Sonos/Session.ts` | WebSocket transport, request/response correlation, generic event buffering and deadlines. |
+| `Sonos/Session.ts` | WebSocket transport, the OS-selected local connection address, request/response correlation, generic event buffering and deadlines. |
 | `Sonos/Protocol.ts` | Typed wire envelopes and runtime validation. |
 | `Sonos/Players.ts` | Player identity, addresses, capabilities and isolation of malformed descriptions. |
 | `Sonos/AudioClip.ts` | Clip subscription, loading and completion/error states. |
 | `Sonos/Errors.ts` | Stable error codes and sanitized diagnostics. |
-| `app.ts`, `Media/Clip.ts` | HTTP routes, authorization and serving the configured MP3. |
+| `app.ts`, `Media/Clip.ts` | HTTP routes, authorization, automatic media URL construction and serving the configured MP3. |
 | `Config/*`, `index.ts` | Configuration, dependency wiring and process shutdown. |
 
 ## Development and checks
@@ -262,6 +271,6 @@ The application stays on TypeScript, Node.js and Express. The Sonos adapter uses
 - `npm run test:watch`: watch source-based tests. Build first; process tests exercise the compiled entry point.
 - `npm run speakers`: read-only discovery.
 
-Tests use simulated speakers over local TLS WebSockets, UDP discovery responders and loopback HTTP servers. They cover automatic discovery, changed addresses, UDP retries/cancellation, startup without seed addresses, UUID identity, rename handling, capability checks, malformed/duplicate player isolation, discovery failover, handshake/command diagnostics, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
+Tests use simulated speakers over local TLS WebSockets, UDP discovery responders and loopback HTTP servers. They cover automatic discovery, changed addresses, UDP retries/cancellation, startup without seed addresses or a media URL, automatic media downloads independent of proxy headers, UUID identity, rename handling, capability checks, malformed/duplicate player isolation, discovery failover, handshake/command diagnostics, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
 
 CI runs lint, build and tests for pull requests, branch/version-tag pushes and manual runs. Successful push/manual runs then publish an AMD64 image to GHCR using the tags described above.

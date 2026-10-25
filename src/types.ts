@@ -14,7 +14,11 @@ export interface SonosPlayer {
 
 export interface SonosGateway {
   discover(): Promise<SonosPlayer[]>;
-  sendAnnouncement(player: SonosPlayer, volume: number, clipUrl: string): Promise<void>;
+  sendAnnouncement(player: SonosPlayer, volume: number, media: AnnouncementMedia): Promise<void>;
+}
+
+export interface AnnouncementMedia {
+  urlFor(localAddress: string | undefined): string;
 }
 
 export type AnnouncementStage = 'discovery' | 'announcement';
