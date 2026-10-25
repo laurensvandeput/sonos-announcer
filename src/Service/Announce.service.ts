@@ -1,5 +1,6 @@
 import { isActiveAtHour, SpeakerConfig } from '../Config/SpeakerConfig';
 import { AnnouncementResult, AnnouncementStage, Logger, SonosGateway, SonosPlayer, SpeakerResult } from '../types';
+import { errorDiagnostic, SonosError } from '../Sonos/Errors';
 
 export class ShuttingDownError extends Error {}
 
@@ -50,16 +51,15 @@ export class AnnounceService {
       const discovery = this.client.discover();
       await Promise.all(active.map(async result => {
         const speaker = this.config.getConfig(result.zone);
-        let player: SonosPlayer | undefined;
-        await this.attempt(result, 'discovery', async () => {
+        const player = await this.attempt<SonosPlayer>(result, 'discovery', async () => {
           const matches = (await discovery).filter(candidate => candidate.id === speaker.uuid);
-          if (matches.length !== 1) throw new Error('Configured speaker UUID was not uniquely found.');
-          player = matches[0];
-          if (!player.supportsAudioClip) throw new Error('Speaker does not support AUDIO_CLIP.');
+          if (matches.length !== 1) throw new SonosError('PLAYER_NOT_FOUND', 'Configured speaker UUID was not uniquely found.');
+          const player = matches[0];
+          if (!player.supportsAudioClip) throw new SonosError('UNSUPPORTED_PLAYER', 'Speaker does not support AUDIO_CLIP.');
+          return player;
         });
-        if (player && result.status !== 'failed') {
-          const target = player;
-          await this.attempt(result, 'announcement', () => this.client.sendAnnouncement(target, speaker.volume, this.clip));
+        if (player) {
+          await this.attempt(result, 'announcement', () => this.client.sendAnnouncement(player, speaker.volume, this.clip));
         }
       }));
     }
@@ -69,14 +69,15 @@ export class AnnounceService {
     return outcome;
   }
 
-  private async attempt(result: SpeakerResult, stage: AnnouncementStage, action: () => Promise<void>): Promise<void> {
+  private async attempt<T>(result: SpeakerResult, stage: AnnouncementStage, action: () => Promise<T>): Promise<T | undefined> {
     try {
-      await action();
+      return await action();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown Sonos error.';
+      const diagnostic = errorDiagnostic(error);
       result.status = 'failed';
-      (result.errors ??= []).push({ stage, message });
-      this.logger.warn('Speaker operation failed.', { zone: result.zone, stage, message });
+      (result.errors ??= []).push({ stage, code: diagnostic.code, message: diagnostic.message });
+      this.logger.warn('Speaker operation failed.', { zone: result.zone, stage, ...diagnostic });
+      return undefined;
     }
   }
 }

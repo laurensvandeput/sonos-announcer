@@ -33,7 +33,7 @@ speakers:
 
 The mapping keys are your own labels, used in logs and HTTP responses. Selection uses the physical speaker's UUID, so renaming Woonkamer or Keuken in Sonos does not break announcements. UUIDs are required and duplicates are rejected. Selecting by model alone would also select any additional speakers of that model.
 
-`SONOS_HOSTS` provides discovery addresses. On each announcement, the first reachable seed supplies the household's current player addresses; an unavailable seed does not delay an available one. Use DHCP reservations for the seed IP addresses. UUIDs survive IP changes, but at least one seed address must remain reachable. All seeds should belong to the same Sonos household. Each target's identity and `AUDIO_CLIP` capability are checked before playback. A missing or unsupported target fails individually without blocking other rooms.
+`SONOS_HOSTS` provides discovery addresses. On each announcement, the first reachable seed supplies the household's current player addresses; an unavailable seed does not delay an available one. Use DHCP reservations for the seed IP addresses. UUIDs survive IP changes, but at least one seed address must remain reachable. All seeds should belong to the same Sonos household. Each target's identity and `AUDIO_CLIP` capability are checked before playback. A missing or unsupported target fails individually without blocking other rooms. Malformed player descriptions are skipped with a diagnostic warning. Ambiguous duplicate UUIDs are excluded entirely, while usable speakers remain available. A missing display name falls back to the UUID.
 
 Read-only discovery from your shell:
 
@@ -43,7 +43,7 @@ npm run speakers
 docker exec sonos-announcer node speakers.js
 ```
 
-This prints names, UUIDs, addresses and audio clip support. It only needs `SONOS_HOSTS`; no MP3 or media URL is required. There is no public `/zones` endpoint or Sonos API proxy.
+This prints names, UUIDs, addresses and audio clip support as JSON on stdout. Diagnostic warnings and failures go to stderr. It only needs `SONOS_HOSTS`; no MP3 or media URL is required. There is no public `/zones` endpoint or Sonos API proxy.
 
 ## Playback and schedules
 
@@ -89,13 +89,34 @@ Only local Sonos WebSocket connections allow the speakers' self-signed certifica
 }
 ```
 
-A speaker failure returns HTTP 502 and `success: false`, with a per-room `errors` array containing a `discovery` or `announcement` stage and a message. Other eligible rooms still run. If every room is outside active hours, the result is a successful no-op without contacting Sonos.
+A speaker failure returns HTTP 502 and `success: false`, with a per-room `errors` array containing a `discovery` or `announcement` stage, a stable error `code` and a safe message. Other eligible rooms still run. If every room is outside active hours, the result is a successful no-op without contacting Sonos.
 
 Overlapping requests share the current announcement and result; they do not queue another chime. Once it finishes, a new request starts a new announcement. A disconnected caller does not cancel the operation. Coalescing is local to one process; run one replica to avoid simultaneous playback commands from multiple instances.
 
 `GET /health` returns 200 while accepting announcements and 503 while shutting down. It does not query speaker connectivity or represent the Home Assistant switch state. `HEAD /announce` and `OPTIONS /announce` return 204 without audio, other methods return 405, and subpaths return 404. Do not poll `GET /announce` for switch state.
 
 With `ANNOUNCE_TOKEN`, add `Authorization: Bearer <token>` to the Home Assistant request. The clip itself is available without that header at a random `/clips/<token>.mp3` path supplied directly to Sonos. This path changes on restart; only the configured file is served, with byte-range support and no directory listing. The token is an unguessable URL, not user authentication. Restrict `/clips/` to the speaker network at your proxy if you do not want it internet-accessible. `/zones` is always absent.
+
+## Error diagnosis
+
+The HTTP response includes a short code and message. Logs also include the affected room, operation, speaker address and applicable system/Sonos error code or HTTP handshake status. Raw response bodies, WebSocket close reasons, media URLs and credentials are not logged by the Sonos adapter. When all discovery seeds fail, the log retains each seed's individual failure.
+
+| Code | Meaning |
+| --- | --- |
+| `CONNECTION_FAILED` | Could not establish a connection; logs may include an OS code such as `ECONNREFUSED`. |
+| `HANDSHAKE_REJECTED` | The speaker rejected the WebSocket upgrade; logs include the HTTP status. |
+| `CONNECTION_CLOSED` | The established connection failed or closed before completion. |
+| `TIMEOUT` | A connection or command exceeded its deadline; logs identify the phase and pending command. |
+| `COMMAND_REJECTED` | Sonos rejected a command; a safe Sonos error code is retained when supplied. |
+| `PROTOCOL_ERROR` | A message, command response or clip status was invalid. |
+| `DISCOVERY_FAILED` | None of the configured seeds returned usable player descriptions. |
+| `PLAYER_NOT_FOUND` | The target UUID was missing, ambiguous or no longer matched the address. |
+| `UNSUPPORTED_PLAYER` | The target does not advertise `AUDIO_CLIP`. |
+| `CLIP_FAILED` | Sonos reported `ERROR`, `DISMISSED` or `INTERRUPTED`. |
+| `CLIP_TIMEOUT` | Sonos acknowledged the clip but did not confirm completion before the deadline. |
+| `UNEXPECTED_ERROR` | An unexpected application failure occurred during the speaker operation. |
+
+Timeouts and connection loss never trigger an automatic replay: the clip might already have started. A `CLIP_TIMEOUT` does not mean Sonos stopped playing.
 
 ## Migration from sonos-api
 
@@ -130,6 +151,22 @@ The image includes the example speaker configuration. It runs as the unprivilege
 
 SIGINT, SIGTERM and SIGQUIT reject new announcements and wait for active clips, while keeping the MP3 available for the speakers. Docker's stop timeout must exceed `SHUTDOWN_TIMEOUT_MS`; 130 seconds covers the default 125 seconds.
 
+## Code structure
+
+The application stays on TypeScript, Node.js and Express. The Sonos adapter uses `ws` directly, without a separate Sonos service or SDK.
+
+| Module | Responsibility |
+| --- | --- |
+| `Service/Announce.service.ts` | Schedules, target selection, concurrent-request coalescing and per-speaker results. |
+| `Sonos/Client.ts` | Discovery failover, connection lifetime and checking the selected target before playback. |
+| `Sonos/Session.ts` | WebSocket transport, request/response correlation, generic event buffering and deadlines. |
+| `Sonos/Protocol.ts` | Typed wire envelopes and runtime validation. |
+| `Sonos/Players.ts` | Player identity, addresses, capabilities and isolation of malformed descriptions. |
+| `Sonos/AudioClip.ts` | Clip subscription, loading and completion/error states. |
+| `Sonos/Errors.ts` | Stable error codes and sanitized diagnostics. |
+| `app.ts`, `Media/Clip.ts` | HTTP routes, authorization and serving the configured MP3. |
+| `Config/*`, `index.ts` | Configuration, dependency wiring and process shutdown. |
+
 ## Development and checks
 
 - `npm start`: watch and run the TypeScript application.
@@ -139,6 +176,6 @@ SIGINT, SIGTERM and SIGQUIT reject new announcements and wait for active clips, 
 - `npm run test:watch`: watch source-based tests. Build first; process tests exercise the compiled entry point.
 - `npm run speakers`: read-only discovery.
 
-Tests use simulated speakers over local TLS WebSockets and loopback HTTP servers. They cover UUID identity, rename handling, capability checks, discovery failover, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
+Tests use simulated speakers over local TLS WebSockets and loopback HTTP servers. They cover UUID identity, rename handling, capability checks, malformed/duplicate player isolation, discovery failover, handshake/command diagnostics, clip completion and errors, concurrency, schedules, media downloads, authentication and shutdown. The certificate/key in `test/fixtures` is a public test fixture, never used by the application. No real audio is played by tests.
 
 CI runs lint, build and tests for pull requests and master pushes. Docker publishing remains restricted to master after those checks pass.

@@ -12,7 +12,9 @@ export async function sonosServer(t, options = {}) {
     key: readFileSync(new URL('./fixtures/sonos-key.pem', import.meta.url)),
     cert: readFileSync(new URL('./fixtures/sonos-cert.pem', import.meta.url)),
   });
-  const sockets = new WebSocketServer({ server, path: '/websocket/api' });
+  const sockets = new WebSocketServer({ server, path: '/websocket/api',
+    verifyClient: options.rejectHandshake ? (_info, done) => done(false, 400, 'Bad Request') : undefined,
+  });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = 'wss://127.0.0.1:' + server.address().port + '/websocket/api';
   const player = { id: livingId, name: 'New living room name', websocketUrl: url,

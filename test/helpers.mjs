@@ -24,7 +24,7 @@ export function fixture(options = {}) {
     ...options.client,
   };
   const service = new AnnounceService(client, new SpeakerConfig({ speakers }),
-    'http://announcer.test/clips/doorbell.mp3', logger, options.timeZone || 'Europe/Brussels',
+    'http://announcer.test/clips/doorbell.mp3', options.logger || logger, options.timeZone || 'Europe/Brussels',
     options.now || (() => new Date('2026-10-19T10:00:00Z')));
   return { service, client, calls, players, speakers };
 }

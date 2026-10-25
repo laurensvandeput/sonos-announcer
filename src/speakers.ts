@@ -1,12 +1,15 @@
 import dotenv from 'dotenv';
 import { readSonosUrls } from './Config/AppConfig';
 import { SonosClient } from './Sonos/Client';
+import { errorDiagnostic, SonosError } from './Sonos/Errors';
 
 // Read-only diagnostics, also usable with `docker exec ... node speakers.js`.
 // Does not require a media file or expose a public discovery endpoint.
 if ((process.env.NODE_ENV || 'development') === 'development') dotenv.config({ quiet: true });
 async function main(): Promise<void> {
-  const client = new SonosClient(readSonosUrls(process.env.SONOS_HOSTS), 5000);
+  const client = new SonosClient(readSonosUrls(process.env.SONOS_HOSTS), 5000, {
+    warn: (message: string, details: unknown) => { process.stderr.write(JSON.stringify({ message, details }) + '\n'); },
+  });
   const players = await client.discover();
   process.stdout.write(JSON.stringify(players.map(player => ({
     uuid: player.id, name: player.name, audioClip: player.supportsAudioClip,
@@ -14,6 +17,9 @@ async function main(): Promise<void> {
   })), null, 2) + '\n');
 }
 void main().catch(error => {
-  process.stderr.write((error instanceof Error ? error.message : 'Sonos discovery failed.') + '\n');
+  const diagnostic = error instanceof SonosError ? errorDiagnostic(error) : {
+    code: 'CONFIGURATION_ERROR', message: error instanceof Error ? error.message : 'Invalid discovery configuration.',
+  };
+  process.stderr.write(JSON.stringify(diagnostic) + '\n');
   process.exitCode = 1;
 });

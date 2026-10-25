@@ -23,7 +23,7 @@ export interface SpeakerResult {
   zone: string;
   status: 'announced' | 'skipped' | 'failed';
   reason?: 'outside_active_hours';
-  errors?: { stage: AnnouncementStage; message: string }[];
+  errors?: { stage: AnnouncementStage; message: string; code?: string }[];
 }
 
 export interface AnnouncementResult {

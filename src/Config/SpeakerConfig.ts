@@ -1,8 +1,6 @@
 import { Speaker } from '../types';
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+import { isRecord } from '../validation';
+import { normalizePlayerId } from '../Sonos/Players';
 
 function isIntegerInRange(value: unknown, min: number, max: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
@@ -30,10 +28,10 @@ export class SpeakerConfig {
       if (!isRecord(value) || !isIntegerInRange(value.volume, 0, 100)) {
         throw new Error("Speaker '" + zone + "' must have an integer volume between 0 and 100.");
       }
-      if (typeof value.uuid !== 'string' || !/^RINCON_[A-F0-9]{12}\d{5}$/iu.test(value.uuid)) {
+      const uuid = normalizePlayerId(value.uuid);
+      if (!uuid) {
         throw new Error("Speaker '" + zone + "' must have a Sonos UUID, for example RINCON_347E5C8246BA01400.");
       }
-      const uuid = value.uuid.toUpperCase();
       if (ids.has(uuid)) throw new Error('Each speaker UUID must appear only once.');
       ids.add(uuid);
       const speaker: Speaker = { uuid, volume: value.volume };

@@ -99,3 +99,21 @@ test('unexpected service rejection becomes a controlled 500 response', async t =
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), { success: false, error: 'Announcement failed.' });
 });
+
+test('speaker failures expose a stable code while diagnostic details stay in logs', async t => {
+  const { SonosError } = await import('../src/Sonos/Errors.ts');
+  const warnings = [];
+  const diagnostics = { ...logger, warn(message, details) { warnings.push({ message, details }); } };
+  const failure = new SonosError('COMMAND_REJECTED', 'Sonos rejected the command.', {
+    host: '10.1.60.156:1443', command: 'loadAudioClip', sonosCode: 'ERROR_NOT_SUPPORTED',
+  }, { cause: new Error('http://private.example/secret') });
+  const { service } = fixture({ logger: diagnostics, client: { async sendAnnouncement() { throw failure; } } });
+  const { url } = await listen(t, createApp(service, diagnostics));
+  const response = await fetch(url + '/announce');
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.deepEqual(body.speakers[0].errors, [{ stage: 'announcement', code: 'COMMAND_REJECTED', message: 'Sonos rejected the command.' }]);
+  assert.doesNotMatch(JSON.stringify(body), /10\.1\.60|ERROR_NOT_SUPPORTED|private\.example/);
+  assert.equal(warnings[0].details.details.sonosCode, 'ERROR_NOT_SUPPORTED');
+  assert.doesNotMatch(JSON.stringify(warnings), /private\.example/);
+});

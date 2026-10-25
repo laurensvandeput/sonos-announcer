@@ -76,7 +76,11 @@ test('an acknowledgement alone is not success; timeout closes the socket without
     reply({ id: 'our-clip' }); return true;
   } });
   const client = new SonosClient([server.url], 150);
-  await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, clipUrl), /timed out/);
+  await assert.rejects(client.sendAnnouncement((await client.discover())[0], 25, clipUrl), error => {
+    assert.equal(error.code, 'CLIP_TIMEOUT');
+    assert.equal(error.details.phase, 'event');
+    return true;
+  });
   assert.equal(server.calls.filter(({ header }) => header.command === 'loadAudioClip').length, 1);
 });
 
@@ -85,7 +89,7 @@ test('a stale IP or unsupported speaker never receives a playback command', asyn
     const server = await sonosServer(t);
     const client = new SonosClient([server.url], 1000);
     const [player] = await client.discover();
-    if (invalid === 'identity') server.player.id = 'RINCON_00000000000101400';
+    if (invalid === 'identity') server.player.id = server.player.devices[0].id = 'RINCON_00000000000101400';
     else server.player.devices[0].capabilities = ['PLAYBACK'];
     await assert.rejects(client.sendAnnouncement(player, 25, clipUrl), /UUID|AUDIO_CLIP/);
     assert.equal(server.calls.some(({ header }) => header.command === 'loadAudioClip'), false);

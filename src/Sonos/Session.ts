@@ -1,99 +1,110 @@
 import WebSocket from 'ws';
-import { isRecord } from '../Config/SpeakerConfig';
+import { ErrorDetails, safeErrorCode, SonosError, systemErrorCode } from './Errors';
+import { isEvent, Message, parseMessage, RequestHeader } from './Protocol';
 
-export class SonosError extends Error {}
-export interface Message { header: Record<string, unknown>; body: Record<string, unknown> }
 interface Waiter<T> { resolve(value: T): void; reject(error: Error): void }
+interface PendingCommand extends Waiter<Message> { cmdId: string; header: RequestHeader }
 
-// The local Sonos API uses a self-signed certificate and this public placeholder
-// API key, also used by Home Assistant's sonos-websocket transport.
+// Owns connection lifetime, request correlation and generic event buffering.
+// Player discovery and audio clip interpretation belong to separate modules.
 export class Session {
   private readonly socket: WebSocket;
   private readonly deadline: NodeJS.Timeout;
   private readonly ready: Promise<void>;
+  private readonly host: string;
   private openWaiter?: Waiter<void>;
-  private pending?: Waiter<Message> & { cmdId: string; identity: boolean };
+  private pending?: PendingCommand;
   private eventWaiter?: Waiter<Message>;
   private readonly events: Message[] = [];
-  private failure?: Error;
+  private failure?: SonosError;
   private sequence = 0;
+  private connected = false;
 
   constructor(url: string, timeoutMs: number) {
+    this.host = new URL(url).host;
     this.ready = new Promise((resolve, reject) => { this.openWaiter = { resolve, reject }; });
     this.socket = new WebSocket(url, 'v1.api.smartspeaker.audio', {
+      // Public placeholder also used by Home Assistant's local transport.
       headers: { 'X-Sonos-Api-Key': '123e4567-e89b-12d3-a456-426655440000' },
-      // Scoped to local Sonos sockets; never change global TLS verification.
-      rejectUnauthorized: false,
+      rejectUnauthorized: false, // Local Sonos certificate only; never global TLS settings.
       followRedirects: false,
       perMessageDeflate: false,
-      handshakeTimeout: timeoutMs,
       maxPayload: 512 * 1024,
     });
-    this.deadline = setTimeout(() => this.fail(new SonosError('Sonos operation timed out after ' + timeoutMs + ' ms; playback completion is unknown.')), timeoutMs);
-    this.socket.on('open', () => { this.openWaiter?.resolve(); this.openWaiter = undefined; });
-    this.socket.on('error', () => this.fail(new SonosError('Could not communicate with the Sonos speaker.')));
-    this.socket.on('close', () => this.fail(new SonosError('Sonos connection closed before completion.')));
+    this.deadline = setTimeout(() => this.fail(new SonosError('TIMEOUT',
+      'Sonos operation timed out after ' + timeoutMs + ' ms.', this.context())), timeoutMs);
+    this.socket.on('open', () => { this.connected = true; this.openWaiter?.resolve(); this.openWaiter = undefined; });
+    this.socket.on('unexpected-response', (_request, response) => {
+      this.fail(new SonosError('HANDSHAKE_REJECTED', 'Sonos rejected the WebSocket handshake.',
+        { ...this.context(), httpStatus: response.statusCode }));
+      response.destroy();
+    });
+    this.socket.on('error', error => this.fail(new SonosError(this.connected ? 'CONNECTION_CLOSED' : 'CONNECTION_FAILED',
+      this.connected ? 'Sonos connection failed before completion.' : 'Could not connect to the Sonos speaker.',
+      { ...this.context(), systemCode: systemErrorCode(error) }, { cause: error })));
+    this.socket.on('close', code => this.fail(new SonosError('CONNECTION_CLOSED', 'Sonos connection closed before completion.',
+      { ...this.context(), closeCode: code })));
     this.socket.on('message', data => {
-      try {
-        const value: unknown = JSON.parse(data.toString());
-        if (!Array.isArray(value) || value.length !== 2 || !isRecord(value[0]) || !isRecord(value[1])) throw new Error();
-        this.receive({ header: value[0], body: value[1] });
-      } catch {
-        this.fail(new SonosError('Sonos returned an invalid protocol message.'));
-      }
+      try { this.receive(parseMessage(data.toString())); }
+      catch (error) { this.fail(new SonosError('PROTOCOL_ERROR', 'Sonos returned an invalid protocol message.', this.context(), { cause: error })); }
     });
   }
 
   async open(): Promise<void> { await this.ready; }
 
-  command(header: Record<string, unknown>, body: Record<string, unknown> = {}): Promise<Message> {
+  command(header: RequestHeader, body: Record<string, unknown> = {}): Promise<Message> {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending) return Promise.reject(new SonosError('A Sonos command is already pending.'));
+    if (!this.connected || this.pending) return Promise.reject(new SonosError('INVALID_STATE', 'Sonos session is not ready for another command.'));
     return new Promise((resolve, reject) => {
       const cmdId = String(++this.sequence);
-      this.pending = { resolve, reject, cmdId, identity: !header.command };
+      this.pending = { resolve, reject, cmdId, header };
       this.socket.send(JSON.stringify([{ ...header, cmdId }, body]), error => {
-        if (error) this.fail(new SonosError('Could not send the Sonos command.'));
+        if (error) this.fail(new SonosError('CONNECTION_CLOSED', 'Could not send the Sonos command.',
+          { ...this.context(), systemCode: systemErrorCode(error) }, { cause: error }));
       });
     });
   }
 
   nextEvent(): Promise<Message> {
     if (this.failure) return Promise.reject(this.failure);
+    if (this.eventWaiter) return Promise.reject(new SonosError('INVALID_STATE', 'A Sonos event consumer is already waiting.'));
     const event = this.events.shift();
     if (event) return Promise.resolve(event);
     return new Promise((resolve, reject) => { this.eventWaiter = { resolve, reject }; });
   }
 
-  close(): void { this.fail(new SonosError('Sonos session ended.')); }
+  close(): void { this.fail(new SonosError('SESSION_CLOSED', 'Sonos session ended.', this.context())); }
+
+  private context(): ErrorDetails {
+    return { host: this.host, phase: !this.connected ? 'connect' : this.pending ? 'command' : 'event',
+      command: this.pending?.header.command, namespace: this.pending?.header.namespace };
+  }
 
   private receive(message: Message): void {
     if (this.failure) return;
-    const { header } = message;
+    const { header, body } = message;
     const pending = this.pending;
-    // The deliberately empty identity command returns a global error containing
-    // householdId, without echoing cmdId. All subsequent responses echo cmdId.
-    if (pending && (header.cmdId === pending.cmdId ||
-      (pending.identity && header.namespace === 'global' && typeof header.householdId === 'string'))) {
+    // The identity handshake returns a global error with householdId, without cmdId.
+    if (pending && (header.cmdId === pending.cmdId || (!pending.header.command && header.namespace === 'global' && header.householdId))) {
+      const details = this.context();
       this.pending = undefined;
-      if (!pending.identity && (header.success !== true || header.type === 'globalError')) {
-        pending.reject(new SonosError('Sonos rejected the command.'));
-      } else {
-        pending.resolve(message);
-      }
-    } else if (header.name === 'audioClipStatus' || header.type === 'audioClipStatus') {
+      if (pending.header.command && (header.success !== true || header.type === 'globalError' || header.errorCode)) {
+        pending.reject(new SonosError('COMMAND_REJECTED', 'Sonos rejected the command.',
+          { ...details, sonosCode: safeErrorCode(header.errorCode) || safeErrorCode(body.errorCode) }));
+      } else if (pending.header.command && (header.response !== pending.header.command ||
+        header.namespace.split(':')[0] !== pending.header.namespace.split(':')[0])) {
+        pending.reject(new SonosError('PROTOCOL_ERROR', 'Sonos response does not match the pending command.', details));
+      } else { pending.resolve(message); }
+    } else if (isEvent(header)) {
       if (this.eventWaiter) {
         this.eventWaiter.resolve(message);
         this.eventWaiter = undefined;
-      } else if (this.events.length < 256) {
-        this.events.push(message);
-      } else {
-        this.fail(new SonosError('Too many pending Sonos status events.'));
-      }
+      } else if (this.events.length < 256) { this.events.push(message); }
+      else { this.fail(new SonosError('PROTOCOL_ERROR', 'Too many pending Sonos events.', this.context())); }
     }
   }
 
-  private fail(error: Error): void {
+  private fail(error: SonosError): void {
     if (this.failure) return;
     this.failure = error;
     clearTimeout(this.deadline);

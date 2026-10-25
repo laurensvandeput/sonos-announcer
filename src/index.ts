@@ -23,7 +23,7 @@ try {
   const config = readAppConfig();
   const speakers = new SpeakerConfig(YAML.parse(readFileSync(config.speakersFile, 'utf8')));
   const clip = new Clip(config.clipFile, config.mediaBaseUrl);
-  const service = new AnnounceService(new SonosClient(config.sonosUrls, config.requestTimeoutMs), speakers,
+  const service = new AnnounceService(new SonosClient(config.sonosUrls, config.requestTimeoutMs, logger), speakers,
     clip.url, logger, config.timeZone);
   const server = createServer(createApp(service, logger, config.announceToken, clip));
 
